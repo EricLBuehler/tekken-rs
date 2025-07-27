@@ -803,13 +803,13 @@ impl Tekkenizer {
             },
             audio: self.audio_config.clone(),
         };
-        
+
         // Serialize to JSON
         let json_content = serde_json::to_string_pretty(&model_data)?;
-        
+
         // Write to file
         std::fs::write(path, json_content)?;
-        
+
         Ok(())
     }
 }
