@@ -5,7 +5,7 @@ use std::path::Path;
 use tiktoken_rs::CoreBPE;
 
 use crate::audio::{Audio, AudioConfig, AudioEncoder, AudioEncoding};
-use crate::config::{ModelData, TokenInfo, TokenizerVersion};
+use crate::config::{ModelData, TekkenConfig, TokenInfo, TokenizerVersion};
 use crate::errors::{Result, TokenizerError};
 use crate::special_tokens::{SpecialTokenInfo, SpecialTokenPolicy, SpecialTokens};
 
@@ -36,9 +36,11 @@ pub struct Tekkenizer {
     vocab_size: usize,
     num_special_tokens: usize,
     version: TokenizerVersion,
+    pattern: String,
     special_tokens: Vec<SpecialTokenInfo>,
     special_tokens_map: HashMap<String, usize>,
     vocab: Vec<String>,
+    vocab_tokens: Vec<TokenInfo>,
     audio_config: Option<AudioConfig>,
     audio_encoder: Option<AudioEncoder>,
 }
@@ -71,7 +73,7 @@ impl Tekkenizer {
     pub fn new(
         vocab: Vec<TokenInfo>,
         special_tokens: &Vec<SpecialTokenInfo>,
-        _pattern: String,
+        pattern: String,
         vocab_size: usize,
         num_special_tokens: usize,
         version: TokenizerVersion,
@@ -116,13 +118,13 @@ impl Tekkenizer {
         }
 
         let inner_vocab_size = vocab_size - num_special_tokens;
+        let vocab_tokens_copy = vocab.clone();
         let mergeable_ranks = reload_mergeable_ranks(vocab, inner_vocab_size)?;
 
         // Create tiktoken CoreBPE from mergeable ranks
         let special_tokens: FxHashMap<String, u32> = FxHashMap::default();
-        let pattern = r"(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}{1,3}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+";
 
-        let tekkenizer = CoreBPE::new(mergeable_ranks.clone(), special_tokens, pattern)
+        let tekkenizer = CoreBPE::new(mergeable_ranks.clone(), special_tokens, &pattern)
             .map_err(|e| TokenizerError::InvalidConfig(format!("Failed to create CoreBPE: {e}")))?;
 
         // Create special tokens map
@@ -182,9 +184,11 @@ impl Tekkenizer {
             vocab_size,
             num_special_tokens,
             version,
+            pattern: pattern.to_string(),
             special_tokens: all_special_tokens,
             special_tokens_map,
             vocab: vocab_strings,
+            vocab_tokens: vocab_tokens_copy,
             audio_config,
             audio_encoder,
         })
@@ -756,6 +760,57 @@ impl Tekkenizer {
     #[must_use]
     pub fn audio_config(&self) -> Option<&AudioConfig> {
         self.audio_config.as_ref()
+    }
+
+    /// Saves the tokenizer to a file in the same format as `ModelData`.
+    ///
+    /// This method serializes the tokenizer configuration, vocabulary, and special tokens
+    /// to a JSON file that can be loaded later using `from_file`.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path where the tokenizer configuration file will be written
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on successful write, or an error if the operation fails.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - File cannot be created or written to
+    /// - JSON serialization fails
+    ///
+    /// # Examples
+    ///
+    /// ```rust,no_run
+    /// # use tekken::tekkenizer::Tekkenizer;
+    /// # let tokenizer = Tekkenizer::from_file("tekken.json")?;
+    /// tokenizer.to_file("output_tekken.json")?;
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    pub fn to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        // Create the model data structure
+        let model_data = ModelData {
+            vocab: self.vocab_tokens.clone(),
+            special_tokens: Some(self.special_tokens.clone()),
+            config: TekkenConfig {
+                pattern: self.pattern.clone(),
+                num_vocab_tokens: self.vocab_size - self.num_special_tokens,
+                default_vocab_size: self.vocab_size,
+                default_num_special_tokens: self.num_special_tokens,
+                version: self.version.as_str().to_string(),
+            },
+            audio: self.audio_config.clone(),
+        };
+
+        // Serialize to JSON
+        let json_content = serde_json::to_string_pretty(&model_data)?;
+
+        // Write to file
+        std::fs::write(path, json_content)?;
+
+        Ok(())
     }
 }
 
